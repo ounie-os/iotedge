@@ -66,6 +66,27 @@ static DBusHandlerResult zeo8_filter_func(DBusConnection *c, DBusMessage *m, voi
 
 }
 
+static int get_result_from_shtc1(const char *path)
+{
+    int fd;
+    char temp[8] = {0};
+    int real_temp = 0;
+    fd = open(path, O_RDONLY);
+    if (fd)
+    {
+        read(fd, temp, 8);
+        real_temp = atoi(temp);
+        close(fd);
+        //return (real_temp & 0xffff);
+        return real_temp;
+    }
+    else
+    {
+        dbg(IOT_WARNING, "%s open fail", path);
+        return 0;
+    }
+}
+
 void *ze08_process(void *arg)
 {
     int fd, lcd_fd, i, rd, count = 0;
@@ -76,8 +97,15 @@ void *ze08_process(void *arg)
     unsigned int concentration, range;
     unsigned int concentration_low, concentration_high, range_low, range_high;
     float ppm;
-    const char *gas_name = "CH2O:0.08mg/m3";
+    const char *gas_name = "0.08mg/m3";
     const char *unit = " mg/m3";
+    char tmp[2] = {0xdf, 'C'};
+    char space = ' ';
+    char percent = '%';
+    float temp1 = 0, humidity1 = 0;
+    char temp1_f[8] = {0};
+    char humidity1_f[8] = {0};
+    
     struct serial_params *serial = (struct serial_params *)arg;
     fd = serial_open_file(serial->device, serial->baudrate);
     lcd_fd = open(LCD1602_DEVNAME, O_RDWR);
@@ -88,8 +116,9 @@ void *ze08_process(void *arg)
             serial_set_attr(fd, 8, PARITY_NONE, 1, FLOW_CONTROL_NONE);
             ioctl(lcd_fd, LCD_CLR);
             ioctl(lcd_fd, LCD_COM, 0x0c);
-            ioctl(lcd_fd, LCD_SET, 0);
-            write(lcd_fd, gas_name, strlen(gas_name));
+            //ioctl(lcd_fd, LCD_SET, 0);
+            //write(lcd_fd, gas_name, strlen(gas_name));
+            //write(lcd_fd, &space, 1);
             ioctl(lcd_fd, LCD_SET, 0x40+8);
             write(lcd_fd, unit, strlen(unit));
             dbg(IOT_DEBUG, "ze08 thread start...");
@@ -119,6 +148,19 @@ void *ze08_process(void *arg)
                         snprintf(ppm_str, 16, "%.6f", ppm);
                         ioctl(lcd_fd, LCD_SET, 0x40);
                         write(lcd_fd, ppm_str, strlen(ppm_str));
+                        ioctl(lcd_fd, LCD_SET, 0);
+                        temp1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/temp1_input") / 1000;
+                        humidity1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/humidity1_input") / 1000;
+                        snprintf(humidity1_f, 8, "%.1f", humidity1);
+                        write(lcd_fd, humidity1_f, strlen(humidity1_f));
+                        write(lcd_fd, &percent, 1);
+                        write(lcd_fd, &space, 1);
+                        snprintf(temp1_f, 8, "%.1f", temp1);
+                        write(lcd_fd, temp1_f, strlen(temp1_f));
+                        for (i=0; i<2; i++)
+                        {
+                            write(lcd_fd, &tmp[i], 1);
+                        }
                         count = 0;
                         g_ppm = ppm;
                         if (ppm > 0.08)
