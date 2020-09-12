@@ -218,9 +218,10 @@ dbus_bool_t send_method_call_without_reply(DBusConnection *connection, IpcPath *
  */
 dbus_bool_t send_method_call_with_reply(DBusConnection *connection, IpcPath *path_set, const char *content, char *reply_content)
 {
-    DBusMessage *msg;
+    DBusMessage *msg, *reply;
     DBusMessageIter arg;
     DBusPendingCall *pending;
+    DBusError error;
 #if 0
     const char *dst_bus = "test.wei.dest";
     const char *obj_path = "/test/method/Object";
@@ -267,13 +268,18 @@ dbus_bool_t send_method_call_with_reply(DBusConnection *connection, IpcPath *pat
     }
     
     /** msg: 发送的消息 pending: 接收的消息 */
-    if (!dbus_connection_send_with_reply (connection, msg, &pending, -1)) 
+    //if (!dbus_connection_send_with_reply (connection, msg, &pending, -1))
+    dbus_error_init(&error);
+    reply = dbus_connection_send_with_reply_and_block(connection, msg, -1, &error);
+    if (NULL == reply)
     {
-       dbg(IOT_ERROR, "Out of Memory!");
+       dbg(IOT_ERROR, "no reply dbus message!");
+       printf("error name = %s, message = %s\n", error.name, error.message);
        dbus_message_unref(msg);
        return FALSE;
     }     
 
+#if 0
     if (pending == NULL){
         dbg(IOT_ERROR, "Pending Call NULL: connection is disconnected");
         dbus_message_unref(msg);
@@ -294,10 +300,11 @@ dbus_bool_t send_method_call_with_reply(DBusConnection *connection, IpcPath *pat
     }
 
     dbus_pending_call_unref(pending);
+#endif /* 0 */
 
-    dbg(IOT_DEBUG, "return msg type is %d", dbus_message_get_type(msg));
+    dbg(IOT_DEBUG, "return msg type is %d", dbus_message_get_type(reply));
     
-    if (!dbus_message_iter_init(msg, &arg))
+    if (!dbus_message_iter_init(reply, &arg))
     {
         dbg(IOT_WARNING, "Message has no arguments!\n");
     }
@@ -319,7 +326,7 @@ dbus_bool_t send_method_call_with_reply(DBusConnection *connection, IpcPath *pat
     }
     dbg(IOT_DEBUG, "Got Reply: %s\n", reply_content);
     
-    dbus_message_unref(msg);
+    dbus_message_unref(reply);
     return TRUE;
 }
 
@@ -507,7 +514,7 @@ static void poll_handler(DBusConnection *conn, short events, DBusWatch *watch)
 {
     unsigned int flags = 0;
     int process_count = 1;
-    printf("%s - events = 0x%x\n", __func__, events);
+    dbg(IOT_DEBUG, "%s - events = 0x%x\n", __func__, events);
     if (events & POLLIN) 
         flags |= DBUS_WATCH_READABLE;
     if (events & POLLOUT)

@@ -11,11 +11,12 @@
 #include "logger.h"
 #include "topic_process.h"
 #include "dbus_ipc_name.h"
+#include <pthread.h>
 
 
 
 #define ADDRESS     "tcp://192.168.1.188:1883"
-#define CLIENTID    "gateway-1"
+#define CLIENTID    "air-quality-1" // 设备ID
 
 #define QOS         0
 
@@ -94,6 +95,18 @@ static DBusHandlerResult mqtt_dbus_msg_handle(DBusConnection *c, DBusMessage *m,
             }
         }
     }
+    else if (0 == strcmp(iface_path, SHTC1_IFACE_PATH))
+    {
+        if (0 == strcmp(member_name, "temp_over"))
+        {
+            get_single_arg_from_message(m, &param);
+            if (NULL != param)
+            {
+                dbg(IOT_DEBUG, "recv temp value is %s", param);
+                mqtt_report_event(client, "temp_over", param);
+            }
+        }
+    }
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -125,6 +138,21 @@ int gpio_set(DBusConnection *conn, int pin, int on_off)
 
     return send_method_call_without_reply(conn, &dst_path_set, DBUS_TYPE_STRING, &gpio_status[on_off]);
 }
+
+static int shtc1_set_temp_high_threshold(DBusConnection *conn, char* threshold)
+{
+    
+    IpcPath dst_path_set = {
+            .bus_path = SHTC1_BUS_NAME,
+            .obj_path = SHTC1_OBJ_PATH,
+            .interface_path = SHTC1_IFACE_PATH,
+            .act.method_name = SHTC1_SET_TEMP_HITH_THRESHOLD
+        };
+
+
+    return send_method_call_without_reply(conn, &dst_path_set, DBUS_TYPE_STRING, (const void*)&threshold);
+}
+
 
 static int gpio_status_publish(DBusConnection *conn, void *context, int pin, const char *topic, MQTTAsync_message *message)
 {
@@ -203,6 +231,130 @@ static int ze08_status_publish(DBusConnection *conn, MQTTAsync client, const cha
     return rc;
 }
 
+static int shtc1_temp_publish(DBusConnection *conn, MQTTAsync client, const char *topic, MQTTAsync_message *message)
+{
+    int rc = 0;
+    char *temp_value = NULL;
+    cJSON *json = NULL;
+    char *messageId = NULL;
+    char buf[256] = {0};
+    const char *body = "{\"messageId\":\"%s\", \"deviceId\":\"%s\", \"success\":true, \"properties\":{\"temperature\":\"%s\"}}";
+
+    IpcPath dst_path_set = {
+            .bus_path = SHTC1_BUS_NAME,
+            .obj_path = SHTC1_OBJ_PATH,
+            .interface_path = SHTC1_IFACE_PATH,
+            .act.method_name = SHTC1_GET_METHOD_TEMP
+         };
+
+    send_method_call_with_reply(conn, &dst_path_set, NULL, &temp_value);
+    dbg(IOT_DEBUG, "temperature value is %s", temp_value);
+    json = cJSON_Parse(message->payload);
+    messageId = cJSON_GetObjectItem(json, "messageId")->valuestring;
+    dbg(IOT_DEBUG, "message id %s", messageId);
+    snprintf(buf, sizeof(buf), body, messageId, CLIENTID, temp_value);
+    mqtt_pubmsg(client, topic, buf);
+
+    if (json)
+    {
+        cJSON_Delete(json);
+    }
+    return rc;     
+}
+
+static int shtc1_humidity_publish(DBusConnection *conn, MQTTAsync client, const char *topic, MQTTAsync_message *message)
+{
+    char *humidity_value = NULL;
+    cJSON *json = NULL;
+    int rc = 0;
+    char *messageId = NULL;
+    char buf[256] = {0};
+
+    const char *body = "{\"messageId\":\"%s\", \"deviceId\":\"%s\", \"success\":true, \"properties\":{\"humidity\":\"%s\"}}";
+
+    IpcPath dst_path_set = {
+            .bus_path = SHTC1_BUS_NAME,
+            .obj_path = SHTC1_OBJ_PATH,
+            .interface_path = SHTC1_IFACE_PATH,
+            .act.method_name = SHTC1_GET_METHOD_HUMIDITY
+     };
+
+    send_method_call_with_reply(conn, &dst_path_set, NULL, &humidity_value);
+    dbg(IOT_DEBUG, "humidity value is %s", humidity_value);
+    json = cJSON_Parse(message->payload);
+    messageId = cJSON_GetObjectItem(json, "messageId")->valuestring;
+    dbg(IOT_DEBUG, "message id %s", messageId);
+    snprintf(buf, sizeof(buf), body, messageId, CLIENTID, humidity_value);
+    mqtt_pubmsg(client, topic, buf);
+
+    if (json)
+    {
+        cJSON_Delete(json);
+    }
+    return rc;   
+}
+
+
+static void get_properties(DBusConnection *conn, MQTTAsync client)
+{
+    char *humidity_value = NULL;
+    char *temp_value = NULL;
+    char *ch2o_value = NULL;
+    char humidity_buf[8] = {0};
+    char temp_buf[8] = {0};
+    char ch2o_buf[8] = {0};
+    char buf[256] = {0};
+    const char *body = "{\"messageId\":\"188\",\"properties\":{\"humidity\":\"%s\", \"temperature\":\"%s\", \"ch2o_value\":\"%s\"}}";
+
+    IpcPath dst_path_set_humidity = {
+            .bus_path = SHTC1_BUS_NAME,
+            .obj_path = SHTC1_OBJ_PATH,
+            .interface_path = SHTC1_IFACE_PATH,
+            .act.method_name = SHTC1_GET_METHOD_HUMIDITY
+     };
+
+    IpcPath dst_path_set_temp = {
+        .bus_path = SHTC1_BUS_NAME,
+        .obj_path = SHTC1_OBJ_PATH,
+        .interface_path = SHTC1_IFACE_PATH,
+        .act.method_name = SHTC1_GET_METHOD_TEMP
+    };
+
+    IpcPath dst_path_set_ze08 = {
+            .bus_path = ZE08_BUS_NAME,
+            .obj_path = ZE08_OBJ_PATH,
+            .interface_path = ZE08_IFACE_PATH,
+            .act.method_name = ZE08_GET_METHOD_NAME
+    };
+    /*
+        send_method_call_with_reply 返回的指针的内容需要在再次调用前把内容拷贝出来
+        否则就会被后续内容覆盖
+    */
+    send_method_call_with_reply(conn, &dst_path_set_ze08, NULL, &ch2o_value);
+    snprintf(ch2o_buf, sizeof(ch2o_buf)-1, "%s", ch2o_value);
+
+    send_method_call_with_reply(conn, &dst_path_set_temp, NULL, &temp_value);
+    snprintf(temp_buf, sizeof(temp_buf)-1, "%s", temp_value);
+
+    send_method_call_with_reply(conn, &dst_path_set_humidity, NULL, &humidity_value);
+    snprintf(humidity_buf, sizeof(humidity_buf)-1, "%s", humidity_value);
+
+    snprintf(buf, sizeof(buf), body, humidity_buf, temp_buf, ch2o_buf);
+    //printf("%s\n", buf);
+
+    mqtt_pubmsg(client, "/13816161818/"CLIENTID"/properties/report", buf);
+}
+
+static void *get_properties_process(void *arg)
+{
+    mqtt_msg_data_t *p_msg_data_context = (mqtt_msg_data_t *)arg;
+    while (!disc_finished)
+    {
+        get_properties(p_msg_data_context->conn, p_msg_data_context->client);
+        sleep(3);
+        //printf("=== start get_properties_process ===\n");
+    }
+}
 
 
 void onsubscribe(void* context, MQTTAsync_successData* response)
@@ -266,10 +418,10 @@ int mqtt_pubmsg(MQTTAsync client, const char *topic, const char *payload)
 
 static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char *topicName, int topicLen, MQTTAsync_message *message)
 {
-    cJSON *json, *json_properties, *json_properties_iter, *json_args;
-    int properties_size;
+    cJSON *json, *json_properties, *json_properties_iter, *json_inputs, *json_inputs_iter;
+    int properties_size, inputs_size;
     int i;
-    char *properties_name, *function_name, *messageId;
+    char *properties_name, *function_name, *messageId, *key, *value;
     char buf[256] = {0};
     topic_item_t producdIdTopic, deviceIdTopic, modelActTopic, propertiesAct;
     char *action;
@@ -286,6 +438,7 @@ static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char 
     strncpy(deviceId, deviceIdTopic.start, deviceIdLen);
     dbg(IOT_DEBUG, "deviceId is %s", deviceId);
 
+    // /product-id/device-id/${action}
     action = topic_model_act_jetlinks(topicName, topicLen, &modelActTopic);
     actModelLen = modelActTopic.len >= sizeof(act) ? sizeof(act)-1 : modelActTopic.len;
     strncpy(act, modelActTopic.start, actModelLen);
@@ -316,6 +469,14 @@ static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char 
                 {
                     ze08_status_publish(dbus_conn, client, topic_reply, message);
                 }
+                else if (0 == strcmp(properties_name, "temperature"))
+                {
+                    shtc1_temp_publish(dbus_conn, client, topic_reply, message);
+                }
+                else if (0 == strcmp(properties_name, "humidity"))
+                {
+                    shtc1_humidity_publish(dbus_conn, client, topic_reply, message);
+                }
             }
         }
         else if (0 == strncmp(propertiesAct.start, "write", 5))
@@ -340,6 +501,23 @@ static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char 
             else if (0 == strcmp(function_name, "turn_on_led"))
             {
                 gpio_set(dbus_conn, 53, 1);
+            }
+            else if (0 == strcmp(function_name, "set_temp_high_threshold"))
+            {
+                json_inputs = cJSON_GetObjectItem(json, "inputs");
+                inputs_size = cJSON_GetArraySize(json_inputs);
+                for (i = 0; i < inputs_size; i++)
+                {
+                    json_inputs_iter = cJSON_GetArrayItem(json_inputs, i);
+                    key = cJSON_GetObjectItem(json_inputs_iter, "name")->valuestring;
+                    dbg(IOT_DEBUG, "name = %s", key);
+                    value = cJSON_GetObjectItem(json_inputs_iter, "value")->valuestring;
+                    dbg(IOT_DEBUG, "value = %f", value);
+                    if (0 == strcmp(key, "high_threshold"))
+                    {
+                        shtc1_set_temp_high_threshold(dbus_conn, value);
+                    }
+                }
             }
             messageId = cJSON_GetObjectItem(json, "messageId")->valuestring;
             //deviceId = cJSON_GetObjectItem(json, "deviceId")->valuestring;
@@ -495,6 +673,34 @@ static int mqtt_start_connect(void *data)
 }
 
 
+static int mqtt_network_conf(const char* conf_path, char *address_buf, int len)
+{
+    FILE *eth0_conf;
+    eth0_conf = fopen(conf_path, "r");
+    if (NULL == eth0_conf)
+    {
+        dbg(IOT_WARNING, "need network conf file");
+        while (1)
+        {
+            sleep(2);
+            eth0_conf = fopen(conf_path, "r");
+            if (NULL != eth0_conf)
+            {
+                break;
+            }
+        }
+    }
+    if (NULL == fgets(address_buf, len, eth0_conf))
+    {
+        return -1;
+    }
+    dbg(IOT_DEBUG, "mqtt network conf = %s", address_buf);
+
+    fclose(eth0_conf);
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     FdWatchMap *poll_data;
@@ -510,7 +716,9 @@ int main(int argc, char* argv[])
 	unsigned char md5_passwd[16];
 	char md5_passwd_buf[64] = {0};
 	int i;
-
+	char address_buf[32] = {0};
+	pthread_t ntid;
+	
     signal(SIGINT, cfinish);
     strncpy(the_model.productId, PRODUCT_ID, strlen(PRODUCT_ID)+1);
     strncpy(the_model.deviceId, DEVICE_ID, strlen(DEVICE_ID)+1);
@@ -529,10 +737,14 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // 订阅iot.ze08.method发来的信息
+    // 订阅iot.ze08发来的广播信息
     dbus_add_match(the_conn, "type='signal', interface="ZE08_IFACE_PATH);
+    // 订阅iot.shtc1发来的广播信息
+    dbus_add_match(the_conn, "type='signal', interface="SHTC1_IFACE_PATH);
 
-    ret = MQTTAsync_create(&client, ADDRESS, CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    mqtt_network_conf("/mnt/ifcfg-mqtt", address_buf, 32);
+
+    ret = MQTTAsync_create(&client, address_buf, CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     if (ret != 0)
     {
         dbg(IOT_ERROR, "MQTTAsync_create return %d\n", ret);
@@ -565,6 +777,12 @@ int main(int argc, char* argv[])
     {
         dbg(IOT_ERROR, "Failed to register msg handler callback");
         return 1;
+    }
+
+    rc = pthread_create(&ntid, NULL, get_properties_process, (void*)&msg_data_context);
+    if (rc != 0)
+    {
+        dbg(IOT_ERROR, "pthread create fail");
     }
 
     dbus_loop_start(the_conn, (void *)poll_data);

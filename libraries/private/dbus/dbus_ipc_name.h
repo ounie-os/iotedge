@@ -12,6 +12,13 @@
 #define ZE08_OBJ_PATH "/iot/ze08"
 #define ZE08_GET_METHOD_NAME "read"
 
+#define SHTC1_BUS_NAME "iot.device.shtc1"
+#define SHTC1_IFACE_PATH "iot.shtc1.method"
+#define SHTC1_OBJ_PATH "/iot/shtc1"
+#define SHTC1_GET_METHOD_TEMP "temperature"
+#define SHTC1_GET_METHOD_HUMIDITY "humidity"
+#define SHTC1_SET_TEMP_HITH_THRESHOLD "temp_high_threshold"
+
 #define MQTT_CLIENT_BUS_NAME "iot.device.mqtt"
 
 #define GPIO_BUS_NAME "iot.device.gpio"
