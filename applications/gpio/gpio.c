@@ -5,6 +5,7 @@
 #include "dbus_ipc_name.h"
 
 static DBusHandlerResult filter_func_default(DBusConnection *conn, DBusMessage *msg, void *data);
+static void gpio_flash_status(int gpio, int on_ff);
 
 static FilterFuncsCallback ffc = {
             .message_handler = filter_func_default,
@@ -49,8 +50,28 @@ static DBusHandlerResult filter_func_default(DBusConnection *c, DBusMessage *m, 
                 dbg(IOT_WARNING, "param is null");
             }
         }
-        else if (0 == strcmp(member_name, GPIO_SET_METHOD_NAME))
+        else if (0 == strcmp(member_name, GPIO_FLASH_SET_METHOD_NAME))
         {  
+            get_single_arg_from_message(m, &param);
+                if (NULL != param)
+                {
+                    if (0 == strcmp(param, "0"))
+                    {
+                        gpio_flash_status(53, 0);
+                    }
+                    else if (0 == strcmp(param, "1"))
+                    {
+                        gpio_flash_status(53, 1);
+                    }
+                    else
+                    {
+                        dbg(IOT_WARNING, "%s param is %s", member_name, param);
+                    }
+                }
+                else
+                {
+                    dbg(IOT_WARNING, "param is null");
+                }
         }
 
         snprintf(gpio_status, sizeof(gpio_status), "%d", gpio_get_status(53));
@@ -71,6 +92,39 @@ static void cfinish(int sig)
     gpio_free(53);
     dbg(IOT_DEBUG, "got signal %d", sig);
     exit(0);
+}
+
+static void gpio_flash_thread(void *arg)
+{
+    int p_gpio = *(int *)arg;
+    while (1) 
+    {
+        usleep(500000);
+        gpio_put_status(53, 1);
+        usleep(500000);
+        gpio_put_status(53, 0);
+    }
+}
+
+static pthread_t gpio_flash_tid;
+
+static void gpio_flash_status(int gpio, int on_ff)
+{
+    int rc = 0;
+    
+    if (on_ff) 
+    {
+        rc = pthread_create(&gpio_flash_tid, NULL, gpio_flash_thread, (void*)&gpio);
+        if (rc != 0)
+        {
+            dbg(IOT_ERROR, "pthread create fail");
+        }
+    }
+    else
+    {
+        pthread_cancel(gpio_flash_tid);
+        gpio_put_status(53, 0);
+    }
 }
 
 int main(int argc, char *argv[])

@@ -17,7 +17,10 @@
 #define SHTC1_OBJ_PATH "/iot/shtc1"
 #define SHTC1_GET_METHOD_TEMP "temperature"
 #define SHTC1_GET_METHOD_HUMIDITY "humidity"
+#define SHTC1_GET_METHOD_TEMP_THRESHOLD_HIGH "temperature_threshold_high"
+#define SHTC1_GET_METHOD_TEMP_THRESHOLD_LOW "temperature_threshold_low"
 #define SHTC1_SET_TEMP_HITH_THRESHOLD "temp_high_threshold"
+#define SHTC1_SET_TEMP_LOW_THRESHOLD "temp_low_threshold"
 
 #define MQTT_CLIENT_BUS_NAME "iot.device.mqtt"
 
@@ -26,7 +29,7 @@
 #define GPIO_IFACE_PATH "iot.gpio.method"
 #define GPIO_SET_METHOD_NAME "SetGpioStatus"
 #define GPIO_GET_METHOD_NAME "GetGpioStatus"
-
+#define GPIO_FLASH_SET_METHOD_NAME "FlashSetGpio"
 
 
 

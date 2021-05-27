@@ -9,8 +9,8 @@ typedef enum
     IOT_DEBUG = 2
 }iot_log_t;
 
-//#define _dbgdump printf
-#define _dbgdump(fmt, ...) fprintf(stdout, fmt, ##__VA_ARGS__)
+#define _dbgdump(fmt, ...)
+//#define _dbgdump(fmt, ...) fprintf(stdout, fmt, ##__VA_ARGS__)
 
 
 #define dbg(level, fmt, ...) \

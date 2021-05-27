@@ -514,7 +514,7 @@ static void poll_handler(DBusConnection *conn, short events, DBusWatch *watch)
 {
     unsigned int flags = 0;
     int process_count = 1;
-    dbg(IOT_DEBUG, "%s - events = 0x%x\n", __func__, events);
+    dbg(IOT_DEBUG, "%s - events = 0x%x", __func__, events);
     if (events & POLLIN) 
         flags |= DBUS_WATCH_READABLE;
     if (events & POLLOUT)

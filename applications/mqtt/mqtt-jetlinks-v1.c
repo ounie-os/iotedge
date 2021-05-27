@@ -12,7 +12,7 @@
 #include "topic_process.h"
 #include "dbus_ipc_name.h"
 #include <pthread.h>
-
+#include "parse-config.h"
 
 
 #define ADDRESS     "tcp://192.168.1.188:1883"
@@ -23,6 +23,7 @@
 #define CH2O_WARNING_ID "ch2o_warning"
 #define PRODUCT_ID "13816161818"
 #define DEVICE_ID CLIENTID
+#define MQTT_CONFIG_FILE    "/mnt/mqtt.json"
 
 typedef struct
 {
@@ -38,6 +39,7 @@ typedef struct
 
 static dev_model_info_t the_model;
 
+static int config_from_file(const char* conf_path, char *buf, int len);
 static DBusHandlerResult mqtt_dbus_msg_handle(DBusConnection *c, DBusMessage *m, void *data);
 void mqtt_report_event(MQTTAsync client, const char *id, const char *param);
 static FilterFuncsCallback filter_handle = {
@@ -49,6 +51,47 @@ static int disc_finished = 0;
 static int subscribed = 0;
 static int finished = 0;
 static int connectFail = 0;
+static cJSON* g_json = NULL;
+typedef struct
+{
+    char ip[32];
+    int port;
+    int cycle;
+    char client_id[64];
+}mqtt_config;
+#if 0
+static void get_mqtt_config(cJSON* j, const char *string_name, char *address_buf, int len)
+{
+    cJSON* obj = cJSON_GetObjectItem(j, string_name);
+    strncpy(address_buf, obj->valuestring, len);   
+}
+#endif /* 0 */
+static int get_mqtt_config(void *data, int argc, char **argv, char **azColName)
+{
+    int i = 0;
+    mqtt_config *config = (mqtt_config *)data;
+    for (i = 0; i < argc; i++) 
+    {
+        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+        if (0 == strcmp(azColName[i], "ip"))
+        {
+            strncpy(config->ip, argv[i], 31);
+        }
+        else if (0 == strcmp(azColName[i], "port"))
+        {
+            config->port = atoi(argv[i]);
+        }
+        else if (0 == strcmp(azColName[i], "cycle"))
+        {
+            config->cycle = atoi(argv[i]);
+        }
+        else if (0 == strcmp(azColName[i], "client_id"))
+        {
+            strncpy(config->client_id, argv[i], 63);
+        }
+    }
+    return 0;
+}
 
 unsigned long long get_timestamp_now(void)
 {
@@ -107,6 +150,18 @@ static DBusHandlerResult mqtt_dbus_msg_handle(DBusConnection *c, DBusMessage *m,
             }
         }
     }
+    else if (0 == strcmp(iface_path, SHTC1_IFACE_PATH))
+    {
+        if (0 == strcmp(member_name, "temp_below"))
+        {
+            get_single_arg_from_message(m, &param);
+            if (NULL != param)
+            {
+                dbg(IOT_DEBUG, "recv temp value is %s", param);
+                mqtt_report_event(client, "temp_below", param);
+            }
+        }
+    }
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -139,6 +194,17 @@ int gpio_set(DBusConnection *conn, int pin, int on_off)
     return send_method_call_without_reply(conn, &dst_path_set, DBUS_TYPE_STRING, &gpio_status[on_off]);
 }
 
+int gpio_flash(DBusConnection *conn, int pin, int on_off)
+{
+    IpcPath dst_path_set = {
+            .bus_path = GPIO_BUS_NAME,
+            .obj_path = GPIO_OBJ_PATH,
+            .interface_path = GPIO_IFACE_PATH,
+            .act.method_name = GPIO_FLASH_SET_METHOD_NAME
+        };
+    const char *gpio_status[2] = {"0", "1"};
+    return send_method_call_without_reply(conn, &dst_path_set, DBUS_TYPE_STRING, &gpio_status[on_off]);
+}
 static int shtc1_set_temp_high_threshold(DBusConnection *conn, char* threshold)
 {
     
@@ -147,6 +213,16 @@ static int shtc1_set_temp_high_threshold(DBusConnection *conn, char* threshold)
             .obj_path = SHTC1_OBJ_PATH,
             .interface_path = SHTC1_IFACE_PATH,
             .act.method_name = SHTC1_SET_TEMP_HITH_THRESHOLD
+        };
+    return send_method_call_without_reply(conn, &dst_path_set, DBUS_TYPE_STRING, (const void*)&threshold);
+}
+static int shtc1_set_temp_low_threshold(DBusConnection *conn, char* threshold)
+{
+    IpcPath dst_path_set = {
+            .bus_path = SHTC1_BUS_NAME,
+            .obj_path = SHTC1_OBJ_PATH,
+            .interface_path = SHTC1_IFACE_PATH,
+            .act.method_name = SHTC1_SET_TEMP_LOW_THRESHOLD
         };
 
 
@@ -299,12 +375,17 @@ static void get_properties(DBusConnection *conn, MQTTAsync client)
 {
     char *humidity_value = NULL;
     char *temp_value = NULL;
+    char *temp_high_value = NULL;
+    char *temp_low_value = NULL;
     char *ch2o_value = NULL;
     char humidity_buf[8] = {0};
     char temp_buf[8] = {0};
+    char temp_high_buf[8] = {0};
+    char temp_low_buf[8] = {0};
     char ch2o_buf[8] = {0};
+    char geo_buf[32] = {0};
     char buf[256] = {0};
-    const char *body = "{\"messageId\":\"188\",\"properties\":{\"humidity\":\"%s\", \"temperature\":\"%s\", \"ch2o_value\":\"%s\"}}";
+    const char *body = "{\"messageId\":\"188\",\"properties\":{\"humidity\":\"%s\", \"temperature\":\"%s\", \"ch2o_value\":\"%s\", \"temperature_threshold_high\":\"%s\", \"temperature_threshold_low\":\"%s\"}}";
 
     IpcPath dst_path_set_humidity = {
             .bus_path = SHTC1_BUS_NAME,
@@ -320,6 +401,18 @@ static void get_properties(DBusConnection *conn, MQTTAsync client)
         .act.method_name = SHTC1_GET_METHOD_TEMP
     };
 
+    IpcPath dst_path_set_temp_threshold_high = {
+        .bus_path = SHTC1_BUS_NAME,
+        .obj_path = SHTC1_OBJ_PATH,
+        .interface_path = SHTC1_IFACE_PATH,
+        .act.method_name = SHTC1_GET_METHOD_TEMP_THRESHOLD_HIGH
+    };
+    IpcPath dst_path_set_temp_threshold_low = {
+        .bus_path = SHTC1_BUS_NAME,
+        .obj_path = SHTC1_OBJ_PATH,
+        .interface_path = SHTC1_IFACE_PATH,
+        .act.method_name = SHTC1_GET_METHOD_TEMP_THRESHOLD_LOW
+    };
     IpcPath dst_path_set_ze08 = {
             .bus_path = ZE08_BUS_NAME,
             .obj_path = ZE08_OBJ_PATH,
@@ -339,7 +432,11 @@ static void get_properties(DBusConnection *conn, MQTTAsync client)
     send_method_call_with_reply(conn, &dst_path_set_humidity, NULL, &humidity_value);
     snprintf(humidity_buf, sizeof(humidity_buf)-1, "%s", humidity_value);
 
-    snprintf(buf, sizeof(buf), body, humidity_buf, temp_buf, ch2o_buf);
+    send_method_call_with_reply(conn, &dst_path_set_temp_threshold_high, NULL, &temp_high_value);
+    snprintf(temp_high_buf, sizeof(temp_high_buf)-1, "%s", temp_high_value);
+    send_method_call_with_reply(conn, &dst_path_set_temp_threshold_low, NULL, &temp_low_value);
+    snprintf(temp_low_buf, sizeof(temp_low_buf)-1, "%s", temp_low_value);
+    snprintf(buf, sizeof(buf), body, humidity_buf, temp_buf, ch2o_buf, temp_high_buf, temp_low_buf);
     //printf("%s\n", buf);
 
     mqtt_pubmsg(client, "/13816161818/"CLIENTID"/properties/report", buf);
@@ -348,11 +445,17 @@ static void get_properties(DBusConnection *conn, MQTTAsync client)
 static void *get_properties_process(void *arg)
 {
     mqtt_msg_data_t *p_msg_data_context = (mqtt_msg_data_t *)arg;
+    char buf[8] = {0};
+    int cycle = 0;
+    const char *sql = "SELECT cycle from MQTT where id = 1;";
+    mqtt_config the_config = {
+        .cycle = 20
+    };
     while (!disc_finished)
     {
         get_properties(p_msg_data_context->conn, p_msg_data_context->client);
-        sleep(3);
-        //printf("=== start get_properties_process ===\n");
+        op_sqlite_db("/mnt/iot.db", sql, get_mqtt_config, (void *)&the_config);
+        sleep(the_config.cycle);
     }
 }
 
@@ -502,6 +605,14 @@ static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char 
             {
                 gpio_set(dbus_conn, 53, 1);
             }
+            else if (0 == strcmp(function_name, "flash_on"))
+            {
+                gpio_flash(dbus_conn, 53, 1);
+            }
+            else if (0 == strcmp(function_name, "flash_off"))
+            {
+                gpio_flash(dbus_conn, 53, 0);
+            }
             else if (0 == strcmp(function_name, "set_temp_high_threshold"))
             {
                 json_inputs = cJSON_GetObjectItem(json, "inputs");
@@ -516,6 +627,23 @@ static void mqtt_msg_dispatch(DBusConnection *dbus_conn, MQTTAsync client, char 
                     if (0 == strcmp(key, "high_threshold"))
                     {
                         shtc1_set_temp_high_threshold(dbus_conn, value);
+                    }
+                }
+            }
+            else if (0 == strcmp(function_name, "set_temp_low_threshold"))
+            {
+                json_inputs = cJSON_GetObjectItem(json, "inputs");
+                inputs_size = cJSON_GetArraySize(json_inputs);
+                for (i = 0; i < inputs_size; i++)
+                {
+                    json_inputs_iter = cJSON_GetArrayItem(json_inputs, i);
+                    key = cJSON_GetObjectItem(json_inputs_iter, "name")->valuestring;
+                    dbg(IOT_DEBUG, "name = %s", key);
+                    value = cJSON_GetObjectItem(json_inputs_iter, "value")->valuestring;
+                    dbg(IOT_DEBUG, "value = %f", value);
+                    if (0 == strcmp(key, "low_threshold"))
+                    {
+                        shtc1_set_temp_low_threshold(dbus_conn, value);
                     }
                 }
             }
@@ -672,6 +800,23 @@ static int mqtt_start_connect(void *data)
 	return rc;
 }
 
+static int config_from_file(const char* conf_path, char *buf, int len)
+{
+    FILE *conf;
+    conf = fopen(conf_path, "r");
+    if (NULL == conf)
+    {
+        return -1;
+    }
+    else if (NULL == fgets(buf, len, conf))
+    {
+        fclose(conf);
+        return -1;
+    }
+    dbg(IOT_DEBUG, "%s -> %s", conf_path, buf);
+    fclose(conf);
+    return 0;    
+}
 
 static int mqtt_network_conf(const char* conf_path, char *address_buf, int len)
 {
@@ -692,6 +837,7 @@ static int mqtt_network_conf(const char* conf_path, char *address_buf, int len)
     }
     if (NULL == fgets(address_buf, len, eth0_conf))
     {
+        fclose(eth0_conf);
         return -1;
     }
     dbg(IOT_DEBUG, "mqtt network conf = %s", address_buf);
@@ -742,9 +888,17 @@ int main(int argc, char* argv[])
     // 订阅iot.shtc1发来的广播信息
     dbus_add_match(the_conn, "type='signal', interface="SHTC1_IFACE_PATH);
 
+#if 0
     mqtt_network_conf("/mnt/ifcfg-mqtt", address_buf, 32);
+#endif /* 0 */
 
-    ret = MQTTAsync_create(&client, address_buf, CLIENTID, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    const char *sql = "SELECT * from MQTT where id = 1;";
+
+    mqtt_config the_config;
+
+    op_sqlite_db("/mnt/iot.db", sql, get_mqtt_config, (void *)&the_config);
+
+    ret = MQTTAsync_create(&client, &the_config.ip[0], the_config.client_id, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     if (ret != 0)
     {
         dbg(IOT_ERROR, "MQTTAsync_create return %d\n", ret);

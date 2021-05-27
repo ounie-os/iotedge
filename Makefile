@@ -6,6 +6,7 @@ CJSON_PATH := libraries/public/cjson
 SERIAL_PATH := libraries/public/serial
 SSL_PATH := libraries/public/ssl
 COAP_PATH := libraries/public/libcoap
+CONFIG_PATH := libraries/public/config
 APP_COAP_PATH := applications/coap
 APP_GPIO_PATH := applications/gpio
 APP_MODBUS_PATH := applications/modbus
@@ -13,13 +14,13 @@ APP_MQTT_PATH := applications/mqtt
 APP_ZE08_PATH := applications/ze08
 APP_SHTC1_PATH := applications/shtc1
 
-ALL_PATH := $(DBUS_PATH) $(GPIO_PATH) $(CJSON_PATH) $(SERIAL_PATH) $(SSL_PATH) $(COAP_PATH) $(APP_COAP_PATH) $(APP_GPIO_PATH) $(APP_MODBUS_PATH) $(APP_MQTT_PATH) $(APP_ZE08_PATH) $(APP_SHTC1_PATH)
+ALL_PATH := $(DBUS_PATH) $(GPIO_PATH) $(CJSON_PATH) $(CONFIG_PATH) $(SERIAL_PATH) $(SSL_PATH) $(COAP_PATH) $(APP_COAP_PATH) $(APP_GPIO_PATH) $(APP_MODBUS_PATH) $(APP_MQTT_PATH) $(APP_ZE08_PATH) $(APP_SHTC1_PATH)
 
 define MAKE_TARGET_TEMPLATE
 	make -C $1 $2;
 endef
 
-all: dbus-base gpio-api cjson-api serial-api ssl-api coap-api coap-app gpio-app modbus-app mqtt-app ze08-app shtc1-app
+all: dbus-base gpio-api cjson-api config-api serial-api ssl-api coap-api coap-app gpio-app modbus-app mqtt-app ze08-app shtc1-app
 
 dbus-base:
 	#make -C $(DBUS_PATH) all
@@ -30,6 +31,9 @@ gpio-api:
 
 cjson-api:
 	$(call MAKE_TARGET_TEMPLATE, $(CJSON_PATH), all)
+
+config-api:
+	$(call MAKE_TARGET_TEMPLATE, $(CONFIG_PATH), all)
 
 serial-api:
 	$(call MAKE_TARGET_TEMPLATE, $(SERIAL_PATH), all)

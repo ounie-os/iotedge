@@ -12,8 +12,10 @@
 #include "dbus-base.h"
 #include "logger.h"
 #include "dbus_ipc_name.h"
+#include "parse-config.h"
 
 #define LCD1602_DEVNAME "/dev/lcd1602"
+#define ZE08_CONFIG_FILE "/mnt/ze08.json"
 
 #define LCD_CLR _IO('L',0)
 #define LCD_ONE _IO('L',1)
@@ -40,6 +42,7 @@ static FilterFuncsCallback ze08_msg_handler = {
 static int loop = 1;
 static float g_ppm = 0;
 static int ze08_process_flag = 1;
+static cJSON* json = NULL;
 
 static DBusHandlerResult zeo8_filter_func(DBusConnection *c, DBusMessage *m, void *data)
 {
@@ -48,7 +51,7 @@ static DBusHandlerResult zeo8_filter_func(DBusConnection *c, DBusMessage *m, voi
     char *p_ppm = ppm_str;
     iface_path = dbus_message_get_interface(m);
     member_name = dbus_message_get_member(m);
-    dbg(IOT_DEBUG, "if:%s, method:%s", iface_path, member_name);
+    dbg(IOT_DEBUG, "if:%s, method:%s, message type = %d", iface_path, member_name, dbus_message_get_type(m));
     if ((NULL == iface_path) || (NULL == member_name))
     {
         return DBUS_HANDLER_RESULT_HANDLED;
@@ -87,6 +90,27 @@ static int get_result_from_shtc1(const char *path)
     }
 }
 
+#if 0
+static int ze08_config(cJSON *j, const char *string_name)
+{
+    cJSON* c = cJSON_GetObjectItem(j, string_name);
+    int result = (int)(c->valuedouble);
+    return result;
+}
+#endif /* 0 */
+static int ze08_config(void *data, int argc, char **argv, char **azColName)
+{
+    int i = 0;
+    for (i = 0; i < argc; i++) 
+    {
+        if (0 == strcmp(azColName[i], "warning_flag"))
+        {
+            strcpy(data, argv[i]);
+            break;
+        }
+    }
+    return 0;
+}
 void *ze08_process(void *arg)
 {
     int fd, lcd_fd, i, rd, count = 0;
@@ -105,8 +129,14 @@ void *ze08_process(void *arg)
     float temp1 = 0, humidity1 = 0;
     char temp1_f[8] = {0};
     char humidity1_f[8] = {0};
+    int alarm_count = 0, alarm_threshold = 0;
+    int ch2o_over_new = 0, ch2o_over_old = 0;
+    int warning_flag = 0;
     
     struct serial_params *serial = (struct serial_params *)arg;
+#if 0
+    json = get_file_to_json(ZE08_CONFIG_FILE);
+#endif /* 0 */
     fd = serial_open_file(serial->device, serial->baudrate);
     lcd_fd = open(LCD1602_DEVNAME, O_RDWR);
     if (fd > 0) 
@@ -163,7 +193,9 @@ void *ze08_process(void *arg)
                         }
                         count = 0;
                         g_ppm = ppm;
-                        if (ppm > 0.08)
+                        const char *sql = "SELECT warning_flag from ze08 where id = 1;";
+                        op_sqlite_db(DB_PATH, sql, ze08_config, (void *)&warning_flag);
+                        if ((ppm > 0.08) && (1 == warning_flag))
                         {   
                             IpcPath emit_path_set = {
                                     .bus_path = ZE08_BUS_NAME,
@@ -179,8 +211,31 @@ void *ze08_process(void *arg)
                                     .act.signal_name = "ch2o_warning_float"
                                 };
                             //dbg(IOT_DEBUG, "ppm = (0x%x)(%f)", g_ppm, g_ppm);
+#if 0
+                            alarm_count++;
+                            alarm_threshold = ze08_config(json, "threshold_count");
+                            if (alarm_count >= alarm_threshold)
+                            {
                             send_signal(serial->conn, &emit_path_set, DBUS_TYPE_STRING, &p_ppm);
                             send_signal(serial->conn, &emit_path_set1, DBUS_TYPE_UINT32, &g_ppm);
+                                alarm_count = 0;
+                            }
+#endif /* 0 */
+                            ch2o_over_new = 1;
+                            if (ch2o_over_old ^ ch2o_over_new)
+                            {
+                                if (ch2o_over_new)
+                                {
+                                    send_signal(serial->conn, &emit_path_set, DBUS_TYPE_STRING, &p_ppm);
+                                    send_signal(serial->conn, &emit_path_set1, DBUS_TYPE_UINT32, &g_ppm);
+                                }
+                                ch2o_over_old = ch2o_over_new;
+                            }
+                        }
+                        else
+                        {
+                            //alarm_count = 0;
+                            ch2o_over_new = 0;
                         }
                     }
                 }
