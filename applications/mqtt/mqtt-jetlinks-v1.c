@@ -13,6 +13,8 @@
 #include "dbus_ipc_name.h"
 #include <pthread.h>
 #include "parse-config.h"
+#include <sys/socket.h>
+#include <netdb.h>
 
 
 #define ADDRESS     "tcp://192.168.1.188:1883"
@@ -55,6 +57,7 @@ static cJSON* g_json = NULL;
 typedef struct
 {
     char ip[32];
+    char host_name[64];
     int port;
     int cycle;
     char client_id[64];
@@ -72,10 +75,13 @@ static int get_mqtt_config(void *data, int argc, char **argv, char **azColName)
     mqtt_config *config = (mqtt_config *)data;
     for (i = 0; i < argc; i++) 
     {
-        printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
         if (0 == strcmp(azColName[i], "ip"))
         {
             strncpy(config->ip, argv[i], 31);
+        }
+        else if (0 == strcmp(azColName[i], "host"))
+        {
+            strncpy(config->host_name, argv[i], 63);
         }
         else if (0 == strcmp(azColName[i], "port"))
         {
@@ -752,7 +758,7 @@ void connlost(void *context, char *cause)
 
 void onconnectFailure(void* context, MQTTAsync_failureData* response)
 {
-	dbg(IOT_WARNING, "Connect failed, rc %d (%s)", response ? response->code : 0, response ? response->message : NULL);
+	fprintf(stdout, "Connect failed, rc %d (%s)\n", response ? response->code : 0, response ? response->message : NULL);
 	connectFail = 1;
 }
 
@@ -795,7 +801,7 @@ static int mqtt_start_connect(void *data)
 
 	if ((rc = MQTTAsync_connect(p_msg_data_context->client, &conn_opts)) != MQTTASYNC_SUCCESS)
 	{
-		printf("Failed to start connect, return code %d\n", rc);
+		fprintf(stdout, "Failed to start connect, return code %d\n", rc);
 	}
 	return rc;
 }
@@ -863,7 +869,20 @@ int main(int argc, char* argv[])
 	char md5_passwd_buf[64] = {0};
 	int i;
 	char address_buf[32] = {0};
+	char server_uri_buf[128] = {0};
+	char *ip = NULL;
 	pthread_t ntid;
+	struct hostent *hptr;
+#if 0
+	struct hostent
+    {
+        char *h_name;
+        char ** h_aliases;
+        short h_addrtype;
+        short h_length;
+        char ** h_addr_list;
+    };
+#endif /* 0 */
 	
     signal(SIGINT, cfinish);
     strncpy(the_model.productId, PRODUCT_ID, strlen(PRODUCT_ID)+1);
@@ -897,8 +916,32 @@ int main(int argc, char* argv[])
     mqtt_config the_config;
 
     op_sqlite_db("/mnt/iot.db", sql, get_mqtt_config, (void *)&the_config);
+    char *host = &the_config.host_name[0];
+    const char *ptr = NULL;
+    char IPdotdec[32];
+    hptr = gethostbyname(host);
+    if (NULL == hptr)
+    {
+        dbg(IOT_WARNING, "get host name's ip <%s> fail. using raw ip instead\n", host);
+        ip = the_config.ip;
+    }
+    else
+    {
+        ptr = inet_ntop(hptr->h_addrtype, hptr->h_addr_list[0], IPdotdec, 16);
+        if (NULL == ptr)
+        {
+            dbg(IOT_WARNING, "convert ip addr string fail.\n");
+            ip = the_config.ip;
+        }
+        else
+        {
+            dbg(IOT_WARNING, "%s <--> %s\n", host, ptr);
+            ip = &IPdotdec[0];
+        }
+    }
 
-    ret = MQTTAsync_create(&client, &the_config.ip[0], the_config.client_id, MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    snprintf(server_uri_buf, 127, "tcp://%s:%d", ip, the_config.port);
+    ret = MQTTAsync_create(&client, &server_uri_buf[0], the_config.client_id, MQTTCLIENT_PERSISTENCE_NONE, NULL);
     if (ret != 0)
     {
         dbg(IOT_ERROR, "MQTTAsync_create return %d\n", ret);
