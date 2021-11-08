@@ -14,8 +14,10 @@
 #include "dbus_ipc_name.h"
 #include "parse-config.h"
 
+
 #define LCD1602_DEVNAME "/dev/lcd1602"
 #define ZE08_CONFIG_FILE "/mnt/ze08.json"
+
 
 #define LCD_CLR _IO('L',0)
 #define LCD_ONE _IO('L',1)
@@ -51,6 +53,7 @@ static DBusHandlerResult zeo8_filter_func(DBusConnection *c, DBusMessage *m, voi
     char *p_ppm = ppm_str;
     iface_path = dbus_message_get_interface(m);
     member_name = dbus_message_get_member(m);
+    
     dbg(IOT_DEBUG, "if:%s, method:%s, message type = %d", iface_path, member_name, dbus_message_get_type(m));
     if ((NULL == iface_path) || (NULL == member_name))
     {
@@ -90,6 +93,7 @@ static int get_result_from_shtc1(const char *path)
     }
 }
 
+
 #if 0
 static int ze08_config(cJSON *j, const char *string_name)
 {
@@ -98,6 +102,7 @@ static int ze08_config(cJSON *j, const char *string_name)
     return result;
 }
 #endif /* 0 */
+
 static int ze08_config(void *data, int argc, char **argv, char **azColName)
 {
     int i = 0;
@@ -111,6 +116,21 @@ static int ze08_config(void *data, int argc, char **argv, char **azColName)
     }
     return 0;
 }
+
+static unsigned char FuncCheckSum(unsigned char *buf, unsigned char len)
+{
+    unsigned char j, checksum=0;
+    buf += 1;
+
+    for (j=0; j < (len-2); j++)
+    {
+        checksum += *buf;
+        buf++;
+    }
+    checksum = (~checksum) + 1;
+    return checksum;
+}
+
 void *ze08_process(void *arg)
 {
     int fd, lcd_fd, i, rd, count = 0;
@@ -132,11 +152,14 @@ void *ze08_process(void *arg)
     int alarm_count = 0, alarm_threshold = 0;
     int ch2o_over_new = 0, ch2o_over_old = 0;
     int warning_flag = 0;
+    unsigned char checksum = 0;
     
     struct serial_params *serial = (struct serial_params *)arg;
+
 #if 0
     json = get_file_to_json(ZE08_CONFIG_FILE);
 #endif /* 0 */
+
     fd = serial_open_file(serial->device, serial->baudrate);
     lcd_fd = open(LCD1602_DEVNAME, O_RDWR);
     if (fd > 0) 
@@ -155,87 +178,102 @@ void *ze08_process(void *arg)
             while (loop) 
             {			
                 rd = serial_receive(fd, &c, 1);
+                //dbg(IOT_DEBUG, "count = %d, read = %d", count, c);
                 if (rd == 1)
                 {
+                    // ÆðÊ¼Î»
+                    if (c == 0xff)
+                    {
+                        count = 0;
+                    }
                     buf[count] = c;
                     count++;
-                    if (count % 9 == 0)
+                    if (count % 9 == 0) 
                     {
-#if 0
-                        for (i=0; i<9; i++)
+                        checksum = FuncCheckSum(buf, 9);
+                        if (checksum == buf[8])
                         {
-                            printf("0x%02x ", buf[i]);
-                        }
-                        printf("\n");
-#endif /* 0 */
-                        concentration_high = buf[4];
-                        concentration_low = buf[5];
-                        //range_high = buf[6];
-                        //range_low = buf[7];
-                        concentration = (concentration_high << 8) + concentration_low; // ppb
-                        //range = (range_high << 8) + range_low;
-                        ppm = (float)concentration / 1000 * 1.25;
-                        snprintf(ppm_str, 16, "%.6f", ppm);
-                        ioctl(lcd_fd, LCD_SET, 0x40);
-                        write(lcd_fd, ppm_str, strlen(ppm_str));
-                        ioctl(lcd_fd, LCD_SET, 0);
-                        temp1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/temp1_input") / 1000;
-                        humidity1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/humidity1_input") / 1000;
-                        snprintf(humidity1_f, 8, "%.1f", humidity1);
-                        write(lcd_fd, humidity1_f, strlen(humidity1_f));
-                        write(lcd_fd, &percent, 1);
-                        write(lcd_fd, &space, 1);
-                        snprintf(temp1_f, 8, "%.1f", temp1);
-                        write(lcd_fd, temp1_f, strlen(temp1_f));
-                        for (i=0; i<2; i++)
-                        {
-                            write(lcd_fd, &tmp[i], 1);
-                        }
-                        count = 0;
-                        g_ppm = ppm;
-                        const char *sql = "SELECT warning_flag from ze08 where id = 1;";
-                        op_sqlite_db(DB_PATH, sql, ze08_config, (void *)&warning_flag);
-                        if ((ppm > 0.08) && (1 == warning_flag))
-                        {   
-                            IpcPath emit_path_set = {
-                                    .bus_path = ZE08_BUS_NAME,
-                                    .obj_path = ZE08_OBJ_PATH,
-                                    .interface_path = ZE08_IFACE_PATH,
-                                    .act.signal_name = "ch2o_warning"
-                                };
-
-                             IpcPath emit_path_set1 = {
-                                    .bus_path = ZE08_BUS_NAME,
-                                    .obj_path = ZE08_OBJ_PATH,
-                                    .interface_path = ZE08_IFACE_PATH,
-                                    .act.signal_name = "ch2o_warning_float"
-                                };
-                            //dbg(IOT_DEBUG, "ppm = (0x%x)(%f)", g_ppm, g_ppm);
 #if 0
-                            alarm_count++;
-                            alarm_threshold = ze08_config(json, "threshold_count");
-                            if (alarm_count >= alarm_threshold)
+                            for (i=0; i<9; i++)
                             {
-                            send_signal(serial->conn, &emit_path_set, DBUS_TYPE_STRING, &p_ppm);
-                            send_signal(serial->conn, &emit_path_set1, DBUS_TYPE_UINT32, &g_ppm);
-                                alarm_count = 0;
+                                printf("0x%02x ", buf[i]);
                             }
+                            printf("\n");
 #endif /* 0 */
-                            ch2o_over_new = 1;
-                            if (ch2o_over_old ^ ch2o_over_new)
+
+                            concentration_high = buf[4];
+                            concentration_low = buf[5];
+                            //range_high = buf[6];
+                            //range_low = buf[7];
+                            concentration = (concentration_high << 8) + concentration_low; // ppb
+                            //range = (range_high << 8) + range_low;
+                            ppm = (float)concentration / 1000 * 1.25;
+                            snprintf(ppm_str, 16, "%.6f", ppm);
+                            ioctl(lcd_fd, LCD_SET, 0x40);
+                            write(lcd_fd, ppm_str, strlen(ppm_str));
+                            ioctl(lcd_fd, LCD_SET, 0);
+                            temp1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/temp1_input") / 1000;
+                            humidity1 = (float)get_result_from_shtc1("/sys/class/hwmon/hwmon0/humidity1_input") / 1000;
+                            snprintf(humidity1_f, 8, "%.1f", humidity1);
+                            write(lcd_fd, humidity1_f, strlen(humidity1_f));
+                            write(lcd_fd, &percent, 1);
+                            write(lcd_fd, &space, 1);
+                            snprintf(temp1_f, 8, "%.1f", temp1);
+                            write(lcd_fd, temp1_f, strlen(temp1_f));
+                            for (i=0; i<2; i++)
                             {
-                                if (ch2o_over_new)
+                                write(lcd_fd, &tmp[i], 1);
+                            }
+                            count = 0;
+                            g_ppm = ppm;
+                            const char *sql = "SELECT warning_flag from ze08 where id = 1;";
+                            op_sqlite_db(DB_PATH, sql, ze08_config, (void *)&warning_flag);
+                            if ((ppm > 0.08) && (1 == warning_flag))
+                            {   
+                                IpcPath emit_path_set = {
+                                        .bus_path = ZE08_BUS_NAME,
+                                        .obj_path = ZE08_OBJ_PATH,
+                                        .interface_path = ZE08_IFACE_PATH,
+                                        .act.signal_name = "ch2o_warning"
+                                    };
+
+                                 IpcPath emit_path_set1 = {
+                                        .bus_path = ZE08_BUS_NAME,
+                                        .obj_path = ZE08_OBJ_PATH,
+                                        .interface_path = ZE08_IFACE_PATH,
+                                        .act.signal_name = "ch2o_warning_float"
+                                    };
+                                //dbg(IOT_DEBUG, "ppm = (0x%x)(%f)", g_ppm, g_ppm);
+#if 0
+                                alarm_count++;
+                                alarm_threshold = ze08_config(json, "threshold_count");
+                                if (alarm_count >= alarm_threshold)
                                 {
                                     send_signal(serial->conn, &emit_path_set, DBUS_TYPE_STRING, &p_ppm);
                                     send_signal(serial->conn, &emit_path_set1, DBUS_TYPE_UINT32, &g_ppm);
+                                    alarm_count = 0;
                                 }
-                                ch2o_over_old = ch2o_over_new;
+#endif /* 0 */
+                                ch2o_over_new = 1;
+                                if (ch2o_over_old ^ ch2o_over_new)
+                                {
+                                    if (ch2o_over_new)
+                                    {
+                                        send_signal(serial->conn, &emit_path_set, DBUS_TYPE_STRING, &p_ppm);
+                                        send_signal(serial->conn, &emit_path_set1, DBUS_TYPE_UINT32, &g_ppm);
+                                    }
+                                    ch2o_over_old = ch2o_over_new;
+                                }
+                            }
+                            else
+                            {
+                                //alarm_count = 0;
+                                ch2o_over_new = 0;
                             }
                         }
                         else
                         {
-                            //alarm_count = 0;
-                            ch2o_over_new = 0;
+                            fprintf(stdout, "cal checksum=%d, ori checksum=%d", checksum, buf[8]);
                         }
                     }
                 }
