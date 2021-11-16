@@ -48,6 +48,7 @@ static FilterFuncsCallback filter_handle = {
             .message_handler = mqtt_dbus_msg_handle,
             .free_func_handler = NULL,
             .data = NULL};
+static int mqtt_start_connect(void *data);
 
 static int disc_finished = 0;
 static int subscribed = 0;
@@ -738,28 +739,35 @@ int msgarrvd(void *context, char *topicName, int topicLen, MQTTAsync_message *me
 
 void connlost(void *context, char *cause)
 {
+#if 0
 	mqtt_msg_data_t *p = (mqtt_msg_data_t *)context;
 	MQTTAsync client = p->client;
 	MQTTAsync_connectOptions conn_opts = MQTTAsync_connectOptions_initializer;
 	int rc;
+#endif /* 0 */
 
-	dbg(IOT_DEBUG, "Connection lost");
+	fprintf(stdout, "Connection lost");
 	if (cause)
-		dbg(IOT_DEBUG, "     cause: %s", cause);
+		fprintf(stdout, "     cause: %s", cause);
 
-	dbg(IOT_DEBUG, "Reconnecting");
+	fprintf(stdout, "Reconnecting");
+	mqtt_start_connect(context);
+#if 0
 	conn_opts.keepAliveInterval = 20;
 	conn_opts.cleansession = 1;
 	if ((rc = MQTTAsync_connect(client, &conn_opts)) != MQTTASYNC_SUCCESS)
 	{
-		dbg(IOT_WARNING, "Failed to start connect, return code %d", rc);
+		fprintf(stdout, "Failed to start connect, return code %d", rc);
 	}
+#endif /* 0 */
 }
 
 void onconnectFailure(void* context, MQTTAsync_failureData* response)
 {
 	fprintf(stdout, "Connect failed, rc %d (%s)\n", response ? response->code : 0, response ? response->message : NULL);
 	connectFail = 1;
+	sleep(1);
+	mqtt_start_connect(context);
 }
 
 void onDisconnect(void* context, MQTTAsync_successData* response)
