@@ -138,8 +138,8 @@ void *ze08_process(void *arg)
     char buf[16] = {0};
     char ppm_str[16] = {0};
     char *p_ppm = ppm_str;
-    unsigned int concentration, range;
-    unsigned int concentration_low, concentration_high, range_low, range_high;
+    unsigned short concentration;
+    unsigned short concentration_low, concentration_high;
     float ppm;
     const char *gas_name = "0.08mg/m3";
     const char *unit = " mg/m3";
@@ -185,11 +185,19 @@ void *ze08_process(void *arg)
                     if (c == 0xff)
                     {
                         count = 0;
+                        buf[count] = c;
+                        count++;
                     }
+                    while (count)
+                    {
+                        rd = serial_receive(fd, &c, 1);
+                        if (rd == 1)
+                        {
                     buf[count] = c;
                     count++;
                     if (count % 9 == 0) 
                     {
+                                count = 0;
                         checksum = FuncCheckSum(buf, 9);
                         if (checksum == buf[8])
                         {
@@ -203,11 +211,14 @@ void *ze08_process(void *arg)
 
                             concentration_high = buf[4];
                             concentration_low = buf[5];
-                            //range_high = buf[6];
-                            //range_low = buf[7];
                             concentration = (concentration_high << 8) + concentration_low; // ppb
-                            //range = (range_high << 8) + range_low;
+                                    dbg(IOT_WARNING, "concentration_high=%u(%x),concentration_low=%u(%x), concentration=%u(%x)", 
+                                    concentration_high, concentration_high, concentration_low, concentration_low, concentration, concentration);
+                                    if (concentration > 5000) {
+                                        concentration = 5000;
+                                    }
                             ppm = (float)concentration / 1000 * 1.25;
+                                    dbg(IOT_WARNING, "ppm = %f", ppm);
                             snprintf(ppm_str, 16, "%.6f", ppm);
                             ioctl(lcd_fd, LCD_SET, 0x40);
                             write(lcd_fd, ppm_str, strlen(ppm_str));
@@ -224,7 +235,6 @@ void *ze08_process(void *arg)
                             {
                                 write(lcd_fd, &tmp[i], 1);
                             }
-                            count = 0;
                             g_ppm = ppm;
                             const char *sql = "SELECT warning_flag from ze08 where id = 1;";
                             op_sqlite_db(DB_PATH, sql, ze08_config, (void *)&warning_flag);
@@ -274,6 +284,8 @@ void *ze08_process(void *arg)
                         else
                         {
                             fprintf(stdout, "cal checksum=%d, ori checksum=%d", checksum, buf[8]);
+                                }
+                            }
                         }
                     }
                 }
